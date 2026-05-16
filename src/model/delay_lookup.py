@@ -33,7 +33,7 @@ def init_delay_oracle(
     Load the precomputed delay lookup once.
 
     lookup_path example:
-    /user/groups/com-490/H1/final/v1/route_demo_lookup_february.parquet
+    /user/groups/com-490/H1/final/v1/route_demo_outputs/lookup/route_demo_lookup_february.parquet"
     """
     global LOOKUP_DF
 
