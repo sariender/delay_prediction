@@ -986,3 +986,37 @@ residual quantiles = data-driven safety margins
 calibrated quantiles = best guess + safety margin
 delay_prob = compare spare time against calibrated quantiles
 ```
+
+### `calibration_model_data/`
+
+This folder contains all artifacts related to the honest evaluation and calibration stage. In this stage, the model is trained on the train split, residuals are learned on the calibration split, and calibrated quantiles are evaluated on the test split.
+
+```text
+calibration_model_data/
+├── feature_splits/
+│   ├── train_final_features_df.parquet
+│   ├── calib_final_features_df.parquet
+│   └── test_final_features_df.parquet
+│
+├── models/
+│   └── eval_calib_gbt_model/
+│
+├── calibration_artifacts/
+│   ├── calibration_config.parquet
+│   ├── calibration_residual_tables/
+│   └── global_residual_quantiles.parquet
+│
+└── evaluation_outputs/
+    ├── eval_calib_predictions_full.parquet
+    ├── eval_test_predictions_full.parquet
+    ├── eval_test_quantiles_backoff.parquet
+    ├── eval_coverage_backoff.parquet
+    ├── coverage_backoff.parquet
+    └── test_quantiles_backoff.parquet
+
+| Subfolder | Role in the pipeline |
+|---|---|
+| `feature_splits/` | Stores the train, calibration, and test feature datasets used for honest evaluation. |
+| `models/` | Stores the evaluation-stage model trained only on the train split. |
+| `calibration_artifacts/` | Stores the residual calibration logic: group definitions, residual quantile tables, and global fallback quantiles. |
+| `evaluation_outputs/` | Stores predictions, calibrated test quantiles, and coverage results used to evaluate whether the quantiles are reliable. |
