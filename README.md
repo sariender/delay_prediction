@@ -21,6 +21,12 @@ Given spare time X seconds, what is P(delay <= X)?
 
 The function `delay_prob(...)` answers this by reading the quantiles from the lookup table and interpolating between them.
 
+### Method documentation
+
+The detailed step-by-step explanation of the delay prediction, residual calibration, backoff strategy, and robust-routing probability interface is available here:
+
+[Delay Prediction and Calibration Logic](docs/delay_prediction_calibration_logic_updated.md)
+
 ---
 
 ## Main router interface
@@ -222,6 +228,9 @@ print(p)
 ```text
 project_root/
 ├── README.md
+│
+├── docs/
+│   └── delay_prediction_calibration_logic_updated.md
 │
 ├── src/
 │   ├── __init__.py
