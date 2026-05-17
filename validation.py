@@ -5,11 +5,11 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
-#       jupytext_version: 1.16.1
+#       jupytext_version: 1.16.6
 #   kernelspec:
-#     display_name: PySpark
+#     display_name: Python 3 (ipykernel)
 #     language: python
-#     name: pyspark
+#     name: python3
 # ---
 
 # # Route Planner Validation
@@ -21,9 +21,50 @@
 # 3. Validity of the computed confidence scores based on our assumed delay independence
 
 # +
+import os
+import sys
+import pwd
 import warnings
-warnings.filterwarnings('ignore')
+import numpy as np
+import pandas as pd
 
+from pyspark.sql import SparkSession
+from random import randrange
+import pyspark.sql.functions as F
+
+warnings.simplefilter(action="ignore", category=UserWarning)
+
+username = pwd.getpwuid(os.getuid()).pw_name
+hadoopFS = os.getenv("HADOOP_FS", None)
+groupName = "H1"
+
+print(f"username={username}, group={groupName}")
+# -
+
+spark = (
+    SparkSession.builder
+    .appName(f"{username}-robust-planner")
+    .config("spark.ui.port", randrange(4050, 4450, 5))
+    .config("spark.executorEnv.PYTHONPATH", ":".join(sys.path))
+    .config(
+        "spark.jars",
+        f"{hadoopFS}/data/com-490/jars/iceberg-spark-runtime-3.5_2.13-1.6.1.jar,"
+        f"{hadoopFS}/data/com-490/jars/sedona-spark-shaded-3.5_2.13-1.7.1.jar,"
+        f"{hadoopFS}/data/com-490/jars/geotools-wrapper-1.7.1-28.5.jar",
+    )
+    .config("spark.sql.extensions", "org.apache.iceberg.spark.extensions.IcebergSparkSessionExtensions")
+    .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
+    .config("spark.sql.catalog.iceberg.type", "hadoop")
+    .config("spark.sql.catalog.iceberg.warehouse", f"{hadoopFS}/data/com-490/silver/")
+    .config("spark.executor.memory", "6g")
+    .config("spark.executor.cores", "4")
+    .config("spark.executor.instances", "4")
+    .master("yarn")
+    .getOrCreate()
+)
+spark.sparkContext
+
+# +
 from src.route_planner import RobustJourneyPlanner
 
 # Initialize planner for the Lausanne area
@@ -44,14 +85,12 @@ planner.prepare(spark, regions=REGION_UUIDS)
 # -
 
 # ## 1. Forward RAPTOR Correctness (Fastest Route)
-# 
+#
 # We test a known commute: **Lausanne Gare** to **EPFL** on a Wednesday morning at 08:00.
 
 # +
-# Find stop IDs
-stops = planner.get_stops()
-lausanne_gare = next((s["stop_id"] for s in stops if "Lausanne" in s["stop_name"] and "Gare" in s["stop_name"]), None)
-epfl = next((s["stop_id"] for s in stops if "EPFL" in s["stop_name"] or "Ecublens VD, EPFL" in s["stop_name"]), None)
+lausanne_gare = "8501120"
+epfl = "8501214"
 
 print(f"Source: {lausanne_gare}")
 print(f"Target: {epfl}")
@@ -169,3 +208,7 @@ print(f"Least walking distance: {walk_100}m")
 
 # **Validation Conclusion**:
 # The RAPTOR implementation correctly handles time limits, multi-criteria optimization, and incorporates the predictive delay model as expected.
+
+# ## 5. Stop the spark instance
+
+spark.stop()

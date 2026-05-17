@@ -5,6 +5,7 @@
 #       extension: .py
 #       format_name: light
 #       format_version: '1.5'
+#       jupytext_version: 1.16.6
 #   kernelspec:
 #     display_name: Python 3 (ipykernel)
 #     language: python
@@ -43,8 +44,8 @@ hadoopFS = os.getenv("HADOOP_FS", None)
 groupName = "H1"
 
 print(f"username={username}, group={groupName}")
+# -
 
-# +
 spark = (
     SparkSession.builder
     .appName(f"{username}-robust-planner")
@@ -67,7 +68,6 @@ spark = (
     .getOrCreate()
 )
 spark.sparkContext
-# -
 
 # ## 2. Precompute Transit Graphs for All Days
 #
@@ -109,9 +109,9 @@ import plotly.graph_objects as go
 stops = planner.get_stops()
 stop_options = [(f"{s['stop_name']} ({s['stop_id']})", s["stop_id"]) for s in stops]
 
-# Default stops (Lausanne-Flon and Lausanne Gare if available)
-default_source = stop_options[0][1] if stop_options else ""
-default_target = stop_options[min(1, len(stop_options) - 1)][1] if stop_options else ""
+# Default stops (Lausanne Gare to EPFL if available)
+default_source = "8501120"
+default_target = "8501214"
 
 # --- Widgets ---
 w_source = widgets.Dropdown(
@@ -369,7 +369,6 @@ display(ui)
 # You can also use the planner programmatically.
 # The `day` parameter selects the precomputed graph for that weekday.
 
-# +
 # Example 1: Fastest route on a Wednesday
 journeys = planner.plan(
     source=default_source,
@@ -381,9 +380,7 @@ journeys = planner.plan(
 for j in journeys[:2]:
     print(RobustJourneyPlanner.format_journey(j))
     print()
-# -
 
-# +
 # Example 2: Safest route on a Friday with minimum 70% confidence
 journeys = planner.plan(
     source=default_source,
@@ -396,9 +393,7 @@ journeys = planner.plan(
 for j in journeys[:2]:
     print(RobustJourneyPlanner.format_journey(j))
     print()
-# -
 
-# +
 # Example 3: Latest departure on a Sunday to arrive by 14:00
 journeys = planner.plan(
     source=default_source,
@@ -410,4 +405,7 @@ journeys = planner.plan(
 for j in journeys[:2]:
     print(RobustJourneyPlanner.format_journey(j))
     print()
-# -
+
+# ## 6. Stop the spark instance
+
+spark.stop()
