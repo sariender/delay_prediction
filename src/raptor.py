@@ -140,7 +140,8 @@ def raptor_forward(
     # Apply initial footpaths from source
     for fp in graph.footpaths.get(source, []):
         if fp.distance_m <= max_walk_m:
-            arr = departure_ts + fp.walk_seconds
+            walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
+            arr = departure_ts + walk_sec
             if arr < best_arrival[fp.to_stop]:
                 best_arrival[fp.to_stop] = arr
                 labels[0][fp.to_stop] = Label(
@@ -226,7 +227,8 @@ def raptor_forward(
             for fp in graph.footpaths.get(stop, []):
                 if curr_walk + fp.distance_m > max_walk_m:
                     continue
-                walk_arr = arr + fp.walk_seconds
+                walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
+                walk_arr = arr + walk_sec
                 if walk_arr < best_arrival[fp.to_stop]:
                     best_arrival[fp.to_stop] = walk_arr
                     labels[k][fp.to_stop] = Label(
@@ -394,7 +396,8 @@ def raptor_reverse(
     # Apply footpaths TO target
     for fp in graph.footpaths.get(target, []):
         if fp.distance_m <= max_walk_m:
-            dep = arrival_deadline_ts - fp.walk_seconds
+            walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
+            dep = arrival_deadline_ts - walk_sec
             if dep > best_departure.get(fp.to_stop, 0):
                 best_departure[fp.to_stop] = dep
                 labels[0][fp.to_stop] = Label(
@@ -409,7 +412,8 @@ def raptor_reverse(
     for stop_id, fps in graph.footpaths.items():
         for fp in fps:
             if fp.to_stop == target and fp.distance_m <= max_walk_m:
-                dep = arrival_deadline_ts - fp.walk_seconds
+                walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
+                dep = arrival_deadline_ts - walk_sec
                 if dep > best_departure.get(stop_id, 0):
                     best_departure[stop_id] = dep
                     labels[0][stop_id] = Label(
@@ -477,7 +481,8 @@ def raptor_reverse(
             for fp in graph.footpaths.get(stop, []):
                 if fp.distance_m > max_walk_m:
                     continue
-                walk_dep = dep - fp.walk_seconds
+                walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
+                walk_dep = dep - walk_sec
                 if walk_dep > best_departure.get(fp.to_stop, 0):
                     best_departure[fp.to_stop] = walk_dep
                     labels[k][fp.to_stop] = Label(
