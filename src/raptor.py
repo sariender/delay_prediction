@@ -451,7 +451,7 @@ def raptor_reverse(
             for si in range(end_idx, -1, -1):
                 stop = route.stop_sequence[si]
                 dep_here = best_departure.get(stop, 0)
-                if dep_here > 0:
+                if dep_here > 0 and (source is None or stop != source):
                     arrive_before = dep_here - total_transfer_sec if stop != target else dep_here
                     lt = _latest_trip_arriving_before(route, si, arrive_before)
                     if lt is not None and (current_trip_idx is None or lt > current_trip_idx):
@@ -482,7 +482,8 @@ def raptor_reverse(
                 if fp.distance_m > max_walk_m:
                     continue
                 walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
-                walk_dep = dep - walk_sec
+                buffer_sec = 0 if fp.to_stop == source else total_transfer_sec
+                walk_dep = dep - walk_sec - buffer_sec
                 if walk_dep > best_departure.get(fp.to_stop, 0):
                     best_departure[fp.to_stop] = walk_dep
                     labels[k][fp.to_stop] = Label(
@@ -493,7 +494,8 @@ def raptor_reverse(
 
             # Explicit transfers (reverse: arriving at `stop` from a predecessor)
             for to_stop, transfer_sec in graph.explicit_transfers.get(stop, []):
-                xfer_dep = dep - transfer_sec
+                buffer_sec = 0 if to_stop == source else total_transfer_sec
+                xfer_dep = dep - transfer_sec - buffer_sec
                 if xfer_dep > best_departure.get(to_stop, 0):
                     best_departure[to_stop] = xfer_dep
                     labels[k][to_stop] = Label(
