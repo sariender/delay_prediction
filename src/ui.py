@@ -193,7 +193,7 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
     # --- Layout ---
     dep_time_box = widgets.HBox([w_dep_hour, widgets.HTML("<b style='padding: 0 4px; color: #4a5568;'>:</b>"), w_dep_min], layout=widgets.Layout(margin="0 0 0 5px", align_items="center"))
     arr_time_box = widgets.HBox([w_arr_hour, widgets.HTML("<b style='padding: 0 4px; color: #4a5568;'>:</b>"), w_arr_min], layout=widgets.Layout(margin="0 0 0 5px", align_items="center"))
-    timing_row = widgets.HBox([w_time_type, dep_time_box, arr_time_box], layout=widgets.Layout(margin="5px 0 5px 0", align_items="center"))
+    timing_row = widgets.HBox([w_time_type, dep_time_box, arr_time_box], layout=widgets.Layout(margin="0px", align_items="center"))
 
     # Show/hide container based on dropdown selection
     dep_time_box.layout.display = "flex"
