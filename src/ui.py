@@ -201,9 +201,13 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
 
     def on_time_type_change(change):
         if change["new"] == "depart_at":
+            w_dep_hour.value = w_arr_hour.value
+            w_dep_min.value = w_arr_min.value
             dep_time_box.layout.display = "flex"
             arr_time_box.layout.display = "none"
         else:
+            w_arr_hour.value = w_dep_hour.value
+            w_arr_min.value = w_dep_min.value
             dep_time_box.layout.display = "none"
             arr_time_box.layout.display = "flex"
 
