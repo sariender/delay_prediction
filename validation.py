@@ -98,7 +98,6 @@ print(f"Target: {epfl}")
 journeys_fwd = planner.plan(
     source=lausanne_gare,
     target=epfl,
-    mode="fastest",
     day="wednesday",
     departure_time="08:00",
 )
@@ -121,7 +120,6 @@ for j in journeys_fwd[:2]:
 journeys_rev = planner.plan(
     source=lausanne_gare,
     target=epfl,
-    mode="latest_departure",
     day="wednesday",
     arrival_time="08:30",
 )

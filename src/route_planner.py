@@ -30,7 +30,6 @@ class RobustJourneyPlanner:
         journeys = planner.plan(
             source="8592076",
             target="8501214",
-            mode="fastest",
             departure_time="12:30",
         )
 
@@ -110,14 +109,7 @@ class RobustJourneyPlanner:
         self._spark = spark
         self._region_uuids = [str(r) for r in regions]
 
-        tt_path = timetable_path or self.TIMETABLE_PATH
-        tr_path = transfers_path or self.TRANSFERS_PATH
-
-        timetable_df = spark.read.parquet(tt_path)
-        try:
-            transfers_df = spark.read.parquet(tr_path)
-        except Exception:
-            transfers_df = None
+        timetable_df, transfers_df = self._load_or_fetch_data(spark, timetable_path, transfers_path)
 
         # Build a graph for each day of the week
         for day_name, date_str in self._DAY_TO_DATE.items():
@@ -145,6 +137,250 @@ class RobustJourneyPlanner:
 
         print(f"\n✅ Planner ready — {len(self._graphs)} daily graphs precomputed")
         return self
+
+    def _load_or_fetch_data(
+        self,
+        spark,
+        timetable_path: Optional[str] = None,
+        transfers_path: Optional[str] = None,
+    ) -> Tuple[Any, Any]:
+        """
+        Load timetable and transfers data from group cache if available,
+        otherwise fall back to default paths or fetch from raw Iceberg tables.
+        """
+        # Determine the group name from the paths, default to "H1"
+        group_name = "H1"
+        for path_opt in [timetable_path, transfers_path, self.TIMETABLE_PATH, self.TRANSFERS_PATH]:
+            if path_opt and "/user/groups/com-490/" in path_opt:
+                parts = path_opt.split("/")
+                if len(parts) > 4:
+                    group_name = parts[4]
+                    break
+
+        # If regions are specified, we use/generate regional cache under group folder
+        if self._region_uuids:
+            import hashlib
+            regions_hash = hashlib.md5("_".join(sorted(self._region_uuids)).encode()).hexdigest()
+            cache_dir = f"/user/groups/com-490/{group_name}/final/v1/precomputed"
+            cache_tt_path = f"{cache_dir}/timetable_{regions_hash}.parquet"
+            cache_tr_path = f"{cache_dir}/transfers_{regions_hash}.parquet"
+
+            # 1. Try to load from cache
+            try:
+                print(f"Checking if precomputed tables exist under group folder: {cache_dir}...")
+                timetable_df = spark.read.parquet(cache_tt_path)
+                try:
+                    transfers_df = spark.read.parquet(cache_tr_path)
+                except Exception:
+                    transfers_df = None
+                print("Precomputed tables found and loaded from cache.")
+                return timetable_df, transfers_df
+            except Exception:
+                print("Precomputed tables not found in cache. Resolving fallback...")
+
+            # 2. Try loading from default/provided paths and save to cache
+            timetable_df = None
+            transfers_df = None
+            try:
+                tt_path = timetable_path or self.TIMETABLE_PATH
+                tr_path = transfers_path or self.TRANSFERS_PATH
+                print(f"Loading from paths: {tt_path}")
+                timetable_df = spark.read.parquet(tt_path)
+                try:
+                    transfers_df = spark.read.parquet(tr_path)
+                except Exception:
+                    transfers_df = None
+                
+                print(f"Persisting loaded tables to cache: {cache_dir}...")
+                try:
+                    timetable_df.write.mode("overwrite").parquet(cache_tt_path)
+                    if transfers_df is not None:
+                        transfers_df.write.mode("overwrite").parquet(cache_tr_path)
+                except Exception as e_write:
+                    print(f"Warning: could not write to cache path ({e_write})")
+                return timetable_df, transfers_df
+            except Exception as e_default:
+                # 3. Fetch from raw Iceberg tables
+                print(f"Could not load tables from default paths ({e_default}). Generating from raw Iceberg tables...")
+                timetable_df, transfers_df = self._fetch_raw_timetable_and_transfers(spark, self._region_uuids)
+
+                print(f"Persisting fetched tables to cache: {cache_dir}...")
+                try:
+                    timetable_df.write.mode("overwrite").parquet(cache_tt_path)
+                    if transfers_df is not None:
+                        transfers_df.write.mode("overwrite").parquet(cache_tr_path)
+                except Exception as e_write:
+                    print(f"Warning: could not write to cache path ({e_write})")
+                return timetable_df, transfers_df
+
+        # Fallback if no regions are specified (load directly from paths)
+        tt_path = timetable_path or self.TIMETABLE_PATH
+        tr_path = transfers_path or self.TRANSFERS_PATH
+        timetable_df = spark.read.parquet(tt_path)
+        try:
+            transfers_df = spark.read.parquet(tr_path)
+        except Exception:
+            transfers_df = None
+        return timetable_df, transfers_df
+
+    def _fetch_raw_timetable_and_transfers(self, spark, regions: List[str]):
+        """
+        Fetch timetable and transfers from raw Iceberg tables, filtering by region UUIDs.
+        """
+        from sedona.spark import SedonaContext
+        spark = SedonaContext.create(spark)
+
+        # 1. Load agency text
+        print("Loading agency data...")
+        df_agency = spark.read.options(header=True).csv(
+            "/data/com-490/bronze/sbb/agency/year=2026/month=01/day=31/agency.txt"
+        )
+        df_agency.createOrReplaceTempView("agency")
+
+        # 2. Load transfers CSV
+        print("Loading transfers data...")
+        try:
+            transfers_df = spark.read.csv(
+                "/data/com-490/bronze/sbb/transfers/year=2026/month=01/day=31/transfers.txt", 
+                header=True, 
+                inferSchema=True
+            )
+        except Exception:
+            transfers_df = None
+
+        # 3. Create operator mapping view
+        operator_mapping = spark.table("iceberg.sbb.istdaten") \
+            .select("operator_abrv", "operator_id", "operator_name") \
+            .distinct()
+        operator_mapping.createOrReplaceTempView("op_map")
+
+        # 4. Filter stop times by shapes
+        print(f"Filtering stops and trips for region UUIDs: {regions}...")
+        formatted_regions = ", ".join([f"'{r}'" for r in regions])
+        
+        trip_stop_events_df = spark.sql(f"""
+        SELECT DISTINCT
+         st.trip_id, st.stop_id, split_part(s.stop_id, ':', 1) AS cleaned_stop_id, s.stop_name, s.stop_lat, s.stop_lon, s.location_type, st.arrival_time, st.departure_time,
+         st.stop_sequence, t.service_id, t.trip_short_name, ist.operator_id, ist.operator_name,
+         c.monday, c.tuesday, c.wednesday, c.thursday, c.friday, c.saturday, c.sunday,
+         c.start_date, c.end_date, r.route_short_name, 
+         CASE 
+                WHEN r.route_desc = 'EN' THEN 'NJ'
+                WHEN r.route_desc IN ('EXB', 'KB', 'RUB', 'TX') THEN 'Bus'
+                WHEN r.route_desc IN ('BP', 'FAE') THEN 'BAT'
+                WHEN r.route_desc IN ('GB', 'PB', 'SL') THEN 'T'
+                WHEN r.route_desc IN ('FUN', 'ASC') THEN 'M'
+                WHEN r.route_desc IN ('ZUG', 'EST', 'ARZ', 'IRE') THEN 'R'
+                ELSE r.route_desc 
+            END AS transport_clean
+        FROM iceberg.sbb.stop_times st
+         INNER JOIN iceberg.sbb.stops s 
+            ON s.stop_id = st.stop_id AND s.pub_date = '2026-01-31' 
+        INNER JOIN iceberg.sbb.trips t 
+            ON st.trip_id = t.trip_id AND t.pub_date = '2026-01-31'
+        INNER JOIN iceberg.sbb.calendar c 
+            ON c.service_id = t.service_id AND c.pub_date = '2026-01-31'
+        INNER JOIN iceberg.sbb.routes r 
+            ON r.route_id = t.route_id AND r.pub_date = '2026-01-31'
+        INNER JOIN agency a 
+            ON a.agency_id = r.agency_id
+         LEFT JOIN op_map ist 
+            ON a.agency_name = ist.operator_name
+         JOIN iceberg.geo.shapes g
+            ON ST_Contains(ST_GeomFromWKB(g.wkb_geometry), ST_Point(s.stop_lon, s.stop_lat))
+        WHERE 
+         st.pub_date = '2026-01-31' AND
+         st.stop_id LIKE '85%' AND 
+         g.uuid IN ({formatted_regions})
+        """)
+
+        trip_stop_events_df.createOrReplaceTempView("base_trips")
+
+        # 5. Build February timetable
+        print("Expanding timetable calendar for February 2026...")
+        timetable_df = spark.sql("""
+        WITH date_range AS (
+            SELECT explode(sequence(to_date('2026-02-01'), to_date('2026-02-28'))) AS target_date
+        ),
+        calendar_expanded AS (
+            SELECT 
+                d.target_date,
+                t.*,
+                lower(date_format(d.target_date, 'EEEE')) as day_name
+            FROM date_range d
+            CROSS JOIN base_trips t
+            WHERE d.target_date BETWEEN t.start_date AND t.end_date
+        ),
+        exceptions AS (
+            SELECT service_id, exception_date as ex_date, exception_type 
+            FROM iceberg.sbb.calendar_dates
+            WHERE exception_date BETWEEN '2026-02-01' AND '2026-02-28'
+        )
+        SELECT DISTINCT
+            to_timestamp(
+                concat(
+                    date_add(ce.target_date, CASE WHEN CAST(split(ce.arrival_time, ':')[0] AS INT) >= 24 THEN 1 ELSE 0 END),
+                    ' ',
+                    CASE 
+                        WHEN CAST(split(ce.arrival_time, ':')[0] AS INT) >= 24 
+                        THEN concat(lpad(CAST(split(ce.arrival_time, ':')[0] AS INT) - 24, 2, '0'), ':', split(ce.arrival_time, ':')[1], ':', split(ce.arrival_time, ':')[2])
+                        ELSE ce.arrival_time 
+                    END
+                )
+            ) AS arrival_timestamp,
+
+            to_timestamp(
+                concat(
+                    date_add(ce.target_date, CASE WHEN CAST(split(ce.departure_time, ':')[0] AS INT) >= 24 THEN 1 ELSE 0 END),
+                    ' ',
+                    CASE 
+                        WHEN CAST(split(ce.departure_time, ':')[0] AS INT) >= 24 
+                        THEN concat(lpad(CAST(split(ce.departure_time, ':')[0] AS INT) - 24, 2, '0'), ':', split(ce.departure_time, ':')[1], ':', split(ce.departure_time, ':')[2])
+                        ELSE ce.departure_time 
+                    END
+                )
+            ) AS departure_timestamp,
+
+            ce.trip_id,
+            ce.stop_id,
+            ce.stop_name,
+            ce.stop_lat,
+            ce.stop_lon,
+            ce.stop_sequence,
+            ce.service_id,
+            ce.trip_short_name,
+            ce.operator_id,
+            ce.operator_name,
+            ce.route_short_name,
+            ce.transport_clean,
+            CAST(NULL AS TIMESTAMP) AS predicted_arrival_time,
+            CAST(NULL AS TIMESTAMP) AS predicted_departure_time
+
+        FROM calendar_expanded ce
+        LEFT JOIN exceptions ex 
+            ON ce.service_id = ex.service_id AND ce.target_date = ex.ex_date
+        WHERE 
+            (
+                (
+                    (ce.day_name = 'monday' AND ce.monday = 1) OR
+                    (ce.day_name = 'tuesday' AND ce.tuesday = 1) OR
+                    (ce.day_name = 'wednesday' AND ce.wednesday = 1) OR
+                    (ce.day_name = 'thursday' AND ce.thursday = 1) OR
+                    (ce.day_name = 'friday' AND ce.friday = 1) OR
+                    (ce.day_name = 'saturday' AND ce.saturday = 1) OR
+                    (ce.day_name = 'sunday' AND ce.sunday = 1)
+                )
+                AND (ex.exception_type IS NULL OR ex.exception_type != 2)
+            )
+            OR (ex.exception_type = 1)
+        """)
+
+        # Clean up temporary views
+        spark.catalog.dropTempView("agency")
+        spark.catalog.dropTempView("op_map")
+        spark.catalog.dropTempView("base_trips")
+
+        return timetable_df, transfers_df
 
     def _set_active_day(self, day: str):
         """Switch the active graph to the given day of the week."""
@@ -176,14 +412,7 @@ class RobustJourneyPlanner:
         For multi-day support, use prepare() instead.
         """
         self._spark = spark
-        tt_path = timetable_path or self.TIMETABLE_PATH
-        tr_path = transfers_path or self.TRANSFERS_PATH
-
-        timetable_df = spark.read.parquet(tt_path)
-        try:
-            transfers_df = spark.read.parquet(tr_path)
-        except Exception:
-            transfers_df = None
+        timetable_df, transfers_df = self._load_or_fetch_data(spark, timetable_path, transfers_path)
 
         g = TransitGraph()
         g.build_from_spark(
@@ -399,7 +628,7 @@ class RobustJourneyPlanner:
         self,
         source: str,
         target: str,
-        mode: str = "fastest",
+        mode: str = "all",
         departure_time: Optional[str] = None,
         arrival_time: Optional[str] = None,
         day: Optional[str] = None,
@@ -408,13 +637,12 @@ class RobustJourneyPlanner:
         max_walk_m: Optional[float] = None,
         extra_transfer_sec: Optional[int] = None,
         max_results: int = 5,
+        modes: Optional[List[str]] = None,
     ) -> List[Journey]:
         """
         Plan journeys between source and target.
 
         Modes:
-            "fastest"       — earliest arrival (requires departure_time)
-            "latest_departure" — latest departure to arrive on time (requires arrival_time)
             "least_transfers" — fewest transfers among Pareto-optimal routes
             "least_walking"  — least walking distance
             "safest"         — highest confidence route
@@ -437,7 +665,7 @@ class RobustJourneyPlanner:
         et = extra_transfer_sec if extra_transfer_sec is not None else self.extra_transfer_sec
         mc = min_confidence if min_confidence is not None else self.min_confidence
 
-        if mode in ("latest_departure",) and arrival_time is not None:
+        if arrival_time is not None:
             # Reverse RAPTOR
             arr_ts = self._parse_time(arrival_time, day=day)
             journeys = raptor_reverse(
@@ -454,7 +682,7 @@ class RobustJourneyPlanner:
         else:
             # Forward RAPTOR
             if departure_time is None:
-                raise ValueError("departure_time required for forward search")
+                raise ValueError("departure_time or arrival_time must be provided")
             dep_ts = self._parse_time(departure_time, day=day)
             journeys = raptor_forward(
                 graph=self.graph,
@@ -478,19 +706,38 @@ class RobustJourneyPlanner:
         if mc > 0:
             journeys = [j for j in journeys if j.confidence >= mc]
 
-        # Sort based on mode
-        if mode == "fastest":
-            journeys.sort(key=lambda j: j.arrival_ts)
-        elif mode == "latest_departure":
-            journeys.sort(key=lambda j: -j.departure_ts)
-        elif mode == "least_transfers":
-            journeys.sort(key=lambda j: (j.num_transfers, j.arrival_ts))
-        elif mode == "least_walking":
-            journeys.sort(key=lambda j: (j.total_walk_m, j.arrival_ts))
-        elif mode == "safest":
-            journeys.sort(key=lambda j: (-j.confidence, j.arrival_ts))
-        else:  # "all"
-            journeys.sort(key=lambda j: j.arrival_ts)
+        # Support both single mode and multiple modes
+        if modes is None:
+            if mode is not None and mode != "all":
+                modes = [mode]
+            else:
+                modes = []
+
+        valid_modes = [m for m in modes if m in ["safest", "least_transfers", "least_walking"]]
+
+        # Sort based on criteria hierarchy
+        if valid_modes:
+            def sort_key(j):
+                key = []
+                for m in valid_modes:
+                    if m == "safest":
+                        key.append(-j.confidence)
+                    elif m == "least_transfers":
+                        key.append(j.num_transfers)
+                    elif m == "least_walking":
+                        key.append(j.total_walk_m)
+                # Tie breaker: fastest
+                if arrival_time is not None:
+                    key.append(-j.departure_ts)
+                else:
+                    key.append(j.arrival_ts)
+                return tuple(key)
+            journeys.sort(key=sort_key)
+        else:
+            if arrival_time is not None:
+                journeys.sort(key=lambda j: -j.departure_ts)
+            else:
+                journeys.sort(key=lambda j: j.arrival_ts)
 
         return journeys[:max_results]
 

@@ -120,7 +120,6 @@ create_interactive_ui(planner, default_source=default_source, default_target=def
 journeys = planner.plan(
     source=default_source,
     target=default_target,
-    mode="fastest",
     day="wednesday",
     departure_time="12:30",
 )
@@ -128,11 +127,11 @@ for j in journeys[:2]:
     print(RobustJourneyPlanner.format_journey(j))
     print()
 
-# Example 2: Safest route on a Friday with minimum 70% confidence
+# Example 2: Safest route with least transfers on a Friday with minimum 70% confidence
 journeys = planner.plan(
     source=default_source,
     target=default_target,
-    mode="safest",
+    modes=["safest", "least_transfers"],
     day="friday",
     departure_time="12:30",
     min_confidence=0.7,
@@ -145,7 +144,6 @@ for j in journeys[:2]:
 journeys = planner.plan(
     source=default_source,
     target=default_target,
-    mode="latest_departure",
     day="sunday",
     arrival_time="14:00",
 )
