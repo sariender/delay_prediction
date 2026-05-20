@@ -186,6 +186,7 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
         description="🔍 Find Routes",
         button_style="success",
         layout=widgets.Layout(width="200px", height="40px", margin="15px 0 15px 0"),
+        style=widgets.ButtonStyle(font_size="16px"),
     )
 
     w_output = widgets.Output()
@@ -290,8 +291,6 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
             dep_time = f"{w_dep_hour.value:02d}:{w_dep_min.value:02d}" if time_type == "depart_at" else None
             arr_time = f"{w_arr_hour.value:02d}:{w_arr_min.value:02d}" if time_type == "arrive_by" else None
 
-            print(f"Searching: {source} → {target}, day={day}, modes={selected_modes}")
-
             try:
                 journeys = planner.plan(
                     source=source,
@@ -316,15 +315,13 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
                 print("❌ No routes found with the given constraints.")
                 return
 
-            # Display summary table
-            summary_df = RobustJourneyPlanner.journeys_to_pandas(journeys)
-            display(summary_df)
+            # Display confidence gauge + best route summary card
+            display(HTML(_render_best_route_card(journeys[0])))
 
-            # Display detailed legs
-            for i, j in enumerate(journeys):
-                print(f"\n{'='*60}")
-                print(f"Option {i+1}:")
-                print(RobustJourneyPlanner.format_journey(j))
+            # Display other options summary
+            if len(journeys) > 1:
+                display(HTML(_render_other_options_card(journeys[1:])))
+
 
             # Plot route on map
             try:
@@ -335,6 +332,237 @@ def create_interactive_ui(planner, default_source="8501120", default_target="850
 
     w_button.on_click(on_search)
     display(ui)
+
+
+def _render_other_options_card(journeys) -> str:
+    """Return an HTML card summarising alternative journey options with expandable itineraries."""
+    from datetime import datetime as _dt
+    import random
+
+    # Unique prefix to avoid ID collisions across multiple renders
+    uid = random.randint(10000, 99999)
+
+    rows_html = ""
+    for i, j in enumerate(journeys):
+        dep = _dt.fromtimestamp(j.departure_ts).strftime("%H:%M")
+        arr = _dt.fromtimestamp(j.arrival_ts).strftime("%H:%M")
+        dur = j.travel_time_seconds() / 60
+        conf = j.confidence
+        row_id = f"opt_{uid}_{i}"
+
+        # Confidence badge color
+        if conf >= 0.85:
+            badge_bg, badge_color = "#dcfce7", "#15803d"
+        elif conf >= 0.65:
+            badge_bg, badge_color = "#ecfccb", "#4d7c0f"
+        elif conf >= 0.45:
+            badge_bg, badge_color = "#fef9c3", "#ca8a04"
+        elif conf >= 0.25:
+            badge_bg, badge_color = "#ffedd5", "#ea580c"
+        else:
+            badge_bg, badge_color = "#fee2e2", "#dc2626"
+
+        # Leg summary icons
+        leg_icons = ""
+        for leg in j.legs:
+            if leg.leg_type == "transit":
+                leg_icons += "<span style='margin-right:2px;'>🚌</span>"
+            else:
+                leg_icons += "<span style='margin-right:2px;'>🚶</span>"
+
+        # Build itinerary detail rows
+        detail_legs = ""
+        for leg in j.legs:
+            t_dep = _dt.fromtimestamp(leg.departure_ts).strftime("%H:%M")
+            t_arr = _dt.fromtimestamp(leg.arrival_ts).strftime("%H:%M")
+            if leg.leg_type == "transit":
+                icon = "🚌"
+                detail = leg.trip_id or ""
+                lbl_bg, lbl_color, lbl_border = "#eff6ff", "#1e40af", "#bfdbfe"
+                badge_html = f"<span style='background:{lbl_bg};color:{lbl_color};border:1px solid {lbl_border};padding:2px 8px;border-radius:6px;font-size:11px;margin-left:6px;'>{detail}</span>" if detail else ""
+            else:
+                icon = "🚶"
+                lbl_bg, lbl_color, lbl_border = "#fff7ed", "#9a3412", "#fed7aa"
+                badge_html = f"<span style='background:{lbl_bg};color:{lbl_color};border:1px solid {lbl_border};padding:2px 8px;border-radius:6px;font-size:11px;margin-left:6px;'>{leg.walk_distance_m:.0f}m</span>"
+            detail_legs += f"""
+                <div style="display:flex;align-items:center;padding:4px 0;font-size:13px;">
+                    <span style="margin-right:8px;">{icon}</span>
+                    <span style="color:#334155;">{t_dep} {leg.from_name} → {t_arr} {leg.to_name}</span>
+                    {badge_html}
+                </div>"""
+
+        rows_html += f"""
+        <tr style="border-bottom:1px solid #f1f5f9;">
+            <td style="padding:10px 8px;font-size:14px;color:#1e293b;font-weight:600;width:15%;white-space:nowrap;">{dep} → {arr}</td>
+            <td style="padding:10px 8px;font-size:13px;color:#475569;width:14%;">{dur:.0f} min</td>
+            <td style="padding:10px 8px;font-size:13px;color:#475569;text-align:center;width:13%;">{j.num_transfers}</td>
+            <td style="padding:10px 8px;font-size:13px;color:#475569;text-align:center;width:14%;">{j.total_walk_m:.0f}m</td>
+            <td style="padding:10px 8px;text-align:center;width:16%;">
+                <span style="background:{badge_bg};color:{badge_color};padding:3px 10px;border-radius:12px;font-size:12px;font-weight:700;">{conf:.0%}</span>
+            </td>
+            <td style="padding:10px 8px;font-size:13px;text-align:center;width:16%;">{leg_icons}</td>
+            <td style="padding:10px 4px;text-align:center;">
+                <button id="btn_{row_id}"
+                    onclick="var d=document.getElementById('{row_id}');var b=document.getElementById('btn_{row_id}');if(d.style.display==='none'){{d.style.display='table-row';b.textContent='✕';}}else{{d.style.display='none';b.textContent='ℹ️';}}"
+                    style="background:none;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-size:14px;padding:2px 8px;color:#475569;transition:background 0.15s;"
+                    onmouseover="this.style.background='#f1f5f9'"
+                    onmouseout="this.style.background='none'"
+                >ℹ️</button>
+            </td>
+        </tr>
+        <tr id="{row_id}" style="display:none;">
+            <td colspan="7" style="padding:8px 16px 12px 32px;background:#ffffff;border-bottom:1px solid #e2e8f0;">
+                {detail_legs}
+            </td>
+        </tr>"""
+
+    return f"""
+    <div style="
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin: 8px 0 12px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        max-width: 700px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    ">
+        <div style="font-weight:700;font-size:15px;color:#1e293b;margin-bottom:12px;">
+            📋 Other Options
+        </div>
+        <table style="width:100%;border-collapse:collapse;">
+            <thead>
+                <tr style="border-bottom:2px solid #e2e8f0;">
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:left;width:15%;">Time</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:left;width:14%;">Duration</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:center;width:13%;">Transfers</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:center;width:14%;">Walking</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:center;width:16%;">Confidence</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:center;width:16%;">Legs</th>
+                    <th style="padding:6px 8px;font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;text-align:center;width:12%;">Info</th>
+                </tr>
+            </thead>
+            <tbody>
+                {rows_html}
+            </tbody>
+        </table>
+    </div>
+    """
+
+
+def _render_best_route_card(journey) -> str:
+    """Return an HTML card combining a confidence gauge and route details."""
+    from datetime import datetime as _dt
+
+    pct = max(0.0, min(1.0, journey.confidence))
+    position_pct = pct * 100
+
+    if pct >= 0.85:
+        label, label_color = "Very High", "#15803d"
+    elif pct >= 0.65:
+        label, label_color = "High", "#4d7c0f"
+    elif pct >= 0.45:
+        label, label_color = "Moderate", "#ca8a04"
+    elif pct >= 0.25:
+        label, label_color = "Low", "#ea580c"
+    else:
+        label, label_color = "Very Low", "#dc2626"
+
+    dep = _dt.fromtimestamp(journey.departure_ts).strftime("%H:%M")
+    arr = _dt.fromtimestamp(journey.arrival_ts).strftime("%H:%M")
+    dur = journey.travel_time_seconds() / 60
+
+    # Build legs HTML
+    legs_html = ""
+    for leg in journey.legs:
+        t_dep = _dt.fromtimestamp(leg.departure_ts).strftime("%H:%M")
+        t_arr = _dt.fromtimestamp(leg.arrival_ts).strftime("%H:%M")
+        if leg.leg_type == "transit":
+            icon = "🚌"
+            detail = leg.trip_id or ""
+            color = "#1e40af"
+            bg = "#eff6ff"
+            border = "#bfdbfe"
+            line = f"{t_dep} {leg.from_name} → {t_arr} {leg.to_name}"
+            badge = f"<span style='background:{bg};color:{color};border:1px solid {border};padding:2px 9px;border-radius:6px;font-size:12px;margin-left:8px;'>{detail}</span>" if detail else ""
+        else:
+            icon = "🚶"
+            color = "#9a3412"
+            bg = "#fff7ed"
+            border = "#fed7aa"
+            line = f"{t_dep} {leg.from_name} → {t_arr} {leg.to_name}"
+            badge = f"<span style='background:{bg};color:{color};border:1px solid {border};padding:2px 9px;border-radius:6px;font-size:12px;margin-left:8px;'>{leg.walk_distance_m:.0f}m</span>"
+        legs_html += f"""
+        <div style="display:flex;align-items:center;padding:7px 0;border-bottom:1px solid #f1f5f9;font-size:14px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+            <span style="margin-right:10px;font-size:17px;">{icon}</span>
+            <span style="color:#334155;">{line}</span>
+            {badge}
+        </div>"""
+
+    return f"""
+    <div style="
+        background: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        padding: 20px 24px;
+        margin: 12px 0;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.06);
+        max-width: 640px;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    ">
+        <!-- Title -->
+        <div style="font-weight:700;font-size:16px;color:#1e293b;margin-bottom:14px;">
+            🏆 Best Route
+        </div>
+
+        <!-- Itinerary (moved to top) -->
+        <div style="margin-bottom:16px;">
+            {legs_html}
+        </div>
+
+        <!-- Stats row -->
+        <div style="display:flex;gap:10px;flex-wrap:nowrap;margin-bottom:16px;">
+            <div style="flex:1;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;text-align:center;">
+                <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Departs</div>
+                <div style="font-size:18px;font-weight:700;color:#1e293b;">{dep}</div>
+            </div>
+            <div style="flex:1;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;text-align:center;">
+                <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Arrives</div>
+                <div style="font-size:18px;font-weight:700;color:#1e293b;">{arr}</div>
+            </div>
+            <div style="flex:1;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;text-align:center;">
+                <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Duration</div>
+                <div style="font-size:18px;font-weight:700;color:#1e293b;">{dur:.0f} min</div>
+            </div>
+            <div style="flex:1;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;text-align:center;">
+                <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Transfers</div>
+                <div style="font-size:18px;font-weight:700;color:#1e293b;">{journey.num_transfers}</div>
+            </div>
+            <div style="flex:1;background:#ffffff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6px;text-align:center;">
+                <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px;">Walking</div>
+                <div style="font-size:18px;font-weight:700;color:#1e293b;">{journey.total_walk_m:.0f}m</div>
+            </div>
+        </div>
+
+        <!-- Confidence gauge -->
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
+            <span style="font-weight:600;font-size:13px;color:#334155;">🛡️ Confidence</span>
+            <span style="font-weight:700;font-size:20px;color:{label_color};">{pct:.0%}</span>
+        </div>
+        <div style="position:relative;width:100%;height:12px;border-radius:7px;
+            background:linear-gradient(to right,#ef4444 0%,#f97316 25%,#eab308 50%,#84cc16 75%,#22c55e 100%);
+            box-shadow:inset 0 1px 3px rgba(0,0,0,0.15);">
+            <div style="position:absolute;top:50%;left:{position_pct}%;transform:translate(-50%,-50%);
+                width:20px;height:20px;border-radius:50%;background:#fff;border:3px solid #475569;
+                box-shadow:0 2px 6px rgba(0,0,0,0.25);"></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:5px;font-size:11px;color:#94a3b8;">
+            <span>Risky</span>
+            <span>Reliable</span>
+        </div>
+        <div style="text-align:center;margin-top:4px;font-size:12px;color:{label_color};font-weight:600;">{label} Confidence</div>
+    </div>
+    """
 
 
 def _plot_route_map(journey, planner, stops):
