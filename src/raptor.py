@@ -54,7 +54,7 @@ class Journey:
     confidence: float = 1.0
 
     def travel_time_seconds(self) -> int:
-        return self.arrival_ts - self.departure_ts
+        return max(0, self.arrival_ts - self.departure_ts)
 
     def __repr__(self):
         from datetime import datetime
@@ -127,6 +127,9 @@ def raptor_forward(
     where Pareto dimensions are (arrival_time, num_transfers).
     """
     total_transfer_sec = min_transfer_sec + extra_transfer_sec
+
+    # Lower bound: never accept arrivals before we even departed
+    min_valid_arrival = departure_ts
 
     # labels[k][stop] = best Label reaching stop in exactly k transit legs
     labels: List[Dict[str, Label]] = [dict() for _ in range(max_rounds + 1)]
@@ -205,7 +208,12 @@ def raptor_forward(
                 # Propagate arrival at subsequent stops
                 trip = route.trips[current_trip_idx]
                 arr_ts = trip[si].arrival_ts
-                if arr_ts < best_arrival[stop]:
+                # Guard against midnight-wrapping: reject arrivals before
+                # the boarding time (i.e. timetable timestamp wrapped to
+                # the same calendar day instead of the next).
+                if arr_ts < board_ts:
+                    continue
+                if arr_ts < best_arrival[stop] and arr_ts >= min_valid_arrival:
                     best_arrival[stop] = arr_ts
                     labels[k][stop] = Label(
                         arrival_ts=arr_ts,
@@ -385,6 +393,9 @@ def raptor_reverse(
     """
     total_transfer_sec = min_transfer_sec + extra_transfer_sec
 
+    # Upper bound: never accept departures after the arrival deadline
+    max_valid_departure = arrival_deadline_ts
+
     # labels[k][stop] = latest departure from this stop in k transit legs to target
     labels: List[Dict[str, Label]] = [dict() for _ in range(max_rounds + 1)]
     best_departure: Dict[str, int] = defaultdict(lambda: 0)
@@ -464,7 +475,11 @@ def raptor_reverse(
 
                 trip = route.trips[current_trip_idx]
                 dep_ts = trip[si].departure_ts
-                if dep_ts > best_departure.get(stop, 0):
+                # Guard against midnight-wrapping: reject departures after
+                # the alight time (timestamp wrapped to wrong day).
+                if dep_ts > alight_ts:
+                    continue
+                if dep_ts > best_departure.get(stop, 0) and dep_ts <= max_valid_departure:
                     best_departure[stop] = dep_ts
                     labels[k][stop] = Label(
                         departure_ts=dep_ts,
