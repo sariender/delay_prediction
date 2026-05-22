@@ -480,6 +480,9 @@ print(p)
 ## Project repository layout
 
 ```text
+## Repository layout
+
+```text
 project_root/
 ├── README.md
 │
@@ -492,13 +495,17 @@ project_root/
 │       ├── __init__.py
 │       └── delay_lookup.py
 │
+├── delay_prediction/
+│   ├── README.md
+│   ├── weather_extraction.py
+│   ├── special_days.py
+│   ├── train_calibration_test_gbt_model.py
+│   ├── final_model_training.py
+│   ├── from_timetable_to_lookup.py
+│   └── data_viz.py
+│
 ├── models/
 │   └── README.md
-│
-├── notebooks/
-│   ├── final_model_training.ipynb
-│   ├── february_lookup_generation.ipynb
-│   └── validation_experiments.ipynb
 │
 ├── legacy_notebooks/
 │   └── old_experiments/
