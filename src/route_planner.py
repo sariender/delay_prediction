@@ -20,6 +20,17 @@ from src.raptor import (
 )
 
 
+def mode_emoji(mode):
+    return {
+        "Bus": "🚌",
+        "T": "🚊", # tram
+        "M": "🚇", # metro
+        "R": "🚆", # train
+        "NJ": "🌙", # night train
+        "BAT": "⛴️", # boat
+    }.get(mode, "🚌")
+
+
 class RobustJourneyPlanner:
     """
     Robust journey planner with configurable options.
@@ -777,7 +788,8 @@ class RobustJourneyPlanner:
             t_dep = datetime.fromtimestamp(leg.departure_ts).strftime("%H:%M")
             t_arr = datetime.fromtimestamp(leg.arrival_ts).strftime("%H:%M")
             if leg.leg_type == "transit":
-                lines.append(f"  🚌 {t_dep} {leg.from_name} → {t_arr} {leg.to_name} [{leg.trip_id}]")
+                icon = mode_emoji(leg.transport_mode)
+                lines.append(f"  {icon} {t_dep} {leg.from_name} → {t_arr} {leg.to_name} [{leg.trip_id}]")   
             else:
                 lines.append(f"  🚶 {t_dep} {leg.from_name} → {t_arr} {leg.to_name} ({leg.walk_distance_m:.0f}m)")
         return "\n".join(lines)

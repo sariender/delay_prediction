@@ -3,7 +3,7 @@ from IPython.display import display, HTML, clear_output
 import plotly.graph_objects as go
 import numpy as np
 from datetime import datetime
-from src.route_planner import RobustJourneyPlanner
+from src.route_planner import RobustJourneyPlanner, mode_emoji
 
 
 def create_interactive_ui(planner, default_source="8501120", default_target="8501214"):
@@ -366,7 +366,7 @@ def _render_other_options_card(journeys) -> str:
         leg_icons = ""
         for leg in j.legs:
             if leg.leg_type == "transit":
-                leg_icons += "<span style='margin-right:2px;'>🚌</span>"
+                leg_icons += f"<span style='margin-right:2px;'>{mode_emoji(leg.transport_mode)}</span>"
             else:
                 leg_icons += "<span style='margin-right:2px;'>🚶</span>"
 
@@ -376,7 +376,7 @@ def _render_other_options_card(journeys) -> str:
             t_dep = _dt.fromtimestamp(leg.departure_ts).strftime("%H:%M")
             t_arr = _dt.fromtimestamp(leg.arrival_ts).strftime("%H:%M")
             if leg.leg_type == "transit":
-                icon = "🚌"
+                icon = mode_emoji(leg.transport_mode)
                 detail = leg.trip_id or ""
                 lbl_bg, lbl_color, lbl_border = "#eff6ff", "#1e40af", "#bfdbfe"
                 badge_html = f"<span style='background:{lbl_bg};color:{lbl_color};border:1px solid {lbl_border};padding:2px 8px;border-radius:6px;font-size:11px;margin-left:6px;'>{detail}</span>" if detail else ""
@@ -428,7 +428,7 @@ def _render_other_options_card(journeys) -> str:
         font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     ">
         <div style="font-weight:700;font-size:15px;color:#1e293b;margin-bottom:12px;">
-            📋 Other Options
+            Other Options
         </div>
         <table style="width:100%;border-collapse:collapse;">
             <thead>
@@ -478,7 +478,7 @@ def _render_best_route_card(journey) -> str:
         t_dep = _dt.fromtimestamp(leg.departure_ts).strftime("%H:%M")
         t_arr = _dt.fromtimestamp(leg.arrival_ts).strftime("%H:%M")
         if leg.leg_type == "transit":
-            icon = "🚌"
+            icon = mode_emoji(leg.transport_mode)
             detail = leg.trip_id or ""
             color = "#1e40af"
             bg = "#eff6ff"
@@ -512,7 +512,7 @@ def _render_best_route_card(journey) -> str:
     ">
         <!-- Title -->
         <div style="font-weight:700;font-size:16px;color:#1e293b;margin-bottom:14px;">
-            🏆 Best Route
+            Best Route
         </div>
 
         <!-- Itinerary (moved to top) -->
@@ -546,7 +546,7 @@ def _render_best_route_card(journey) -> str:
 
         <!-- Confidence gauge -->
         <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;">
-            <span style="font-weight:600;font-size:13px;color:#334155;">🛡️ Confidence</span>
+            <span style="font-weight:600;font-size:13px;color:#334155;">Confidence</span>
             <span style="font-weight:700;font-size:20px;color:{label_color};">{pct:.0%}</span>
         </div>
         <div style="position:relative;width:100%;height:12px;border-radius:7px;
@@ -603,7 +603,7 @@ def _plot_route_map(journey, planner, stops):
                 marker=dict(size=10, color=color),
                 text=[f"{t_dep} {from_stop.stop_name}", f"{t_arr} {to_stop.stop_name}"],
                 hoverinfo="text",
-                name=f"{'🚌' if leg.leg_type == 'transit' else '🚶'} {label}",
+                name=f"{mode_emoji(leg.transport_mode) if leg.leg_type == 'transit' else '🚶'} {label}",
             ))
 
     # Center map

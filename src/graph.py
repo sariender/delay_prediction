@@ -93,6 +93,7 @@ class TransitGraph:
         self.event_info: Dict[Tuple[str, str], dict] = {}
         # stop_id -> set of transfer stop_ids (from transfers.parquet)
         self.explicit_transfers: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
+        self.trip_modes: Dict[str, str] = {}
 
     def build_from_spark(
         self,
@@ -152,6 +153,13 @@ class TransitGraph:
                 trip_id=r["trip_id"],
                 stop_name=r["stop_name"],
             )
+
+            if r["trip_id"] not in self.trip_modes:
+                try:
+                    self.trip_modes[r["trip_id"]] = r["transport_clean"] or ""
+                except Exception:
+                    pass
+                    
             trips_dict[r["trip_id"]].append(evt)
 
             # Store event info for delay model

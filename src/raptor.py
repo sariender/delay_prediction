@@ -41,6 +41,7 @@ class JourneyLeg:
     walk_distance_m: float = 0.0
     # For delay model
     stop_id_raw: Optional[str] = None
+    transport_mode: Optional[str] = None
 
 
 @dataclass
@@ -334,6 +335,7 @@ def _reconstruct_journeys(
                     departure_ts=lbl.board_ts,
                     arrival_ts=lbl.arrival_ts,
                     trip_id=lbl.trip_id,
+                    transport_mode=graph.trip_modes.get(lbl.trip_id),
                 ))
                 current_stop = board_stop
                 current_round -= 1
@@ -584,6 +586,7 @@ def _reconstruct_reverse_journeys(
                     departure_ts=lbl.departure_ts,
                     arrival_ts=lbl.board_ts,
                     trip_id=lbl.trip_id,
+                    transport_mode=graph.trip_modes.get(lbl.trip_id),
                 ))
                 current_stop = dest
                 current_round -= 1
