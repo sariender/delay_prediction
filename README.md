@@ -480,9 +480,6 @@ print(p)
 ## Project repository layout
 
 ```text
-## Repository layout
-
-```text
 project_root/
 ├── README.md
 │
