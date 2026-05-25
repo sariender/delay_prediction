@@ -499,8 +499,7 @@ def raptor_reverse(
                 if fp.distance_m > max_walk_m:
                     continue
                 walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
-                buffer_sec = 0 if fp.to_stop == source else total_transfer_sec
-                walk_dep = dep - walk_sec - buffer_sec
+                walk_dep = dep - walk_sec
                 if walk_dep > best_departure.get(fp.to_stop, 0):
                     best_departure[fp.to_stop] = walk_dep
                     labels[k][fp.to_stop] = Label(
@@ -564,14 +563,16 @@ def _reconstruct_reverse_journeys(
                 break
 
             if lbl.walk_from is not None:
+                walk_sec = int(lbl.walk_distance / walking_speed * 60)
+                walk_dep_ts = legs[-1].arrival_ts if legs else lbl.departure_ts
                 legs.append(JourneyLeg(
                     leg_type="walk",
                     from_stop=current_stop,
                     to_stop=lbl.walk_from,
                     from_name=graph.stops.get(current_stop, Stop(current_stop, "", 0, 0)).stop_name,
                     to_name=graph.stops.get(lbl.walk_from, Stop(lbl.walk_from, "", 0, 0)).stop_name,
-                    departure_ts=lbl.departure_ts,
-                    arrival_ts=lbl.departure_ts + int(lbl.walk_distance / walking_speed * 60),
+                    departure_ts=walk_dep_ts,
+                    arrival_ts=walk_dep_ts + walk_sec,
                     walk_distance_m=lbl.walk_distance,
                 ))
                 current_stop = lbl.walk_from
