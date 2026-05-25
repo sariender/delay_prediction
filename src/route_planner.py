@@ -22,12 +22,25 @@ from src.raptor import (
 
 def mode_emoji(mode):
     return {
-        "Bus": "🚌",
-        "T": "🚊", # tram
-        "M": "🚇", # metro
-        "R": "🚆", # train
-        "NJ": "🌙", # night train
-        "BAT": "⛴️", # boat
+        "Bus":  "🚌",
+        "T":    "🚊", # tram
+        "M":    "🚇", # metro
+        "R":    "🚆", # train
+        "NJ":   "🌙", # night train
+        "BAT":  "⛴️", # boat
+        # Train categories that pass through as raw route_desc
+        "IC":   "🚆",
+        "ICE":  "🚆",
+        "IR":   "🚆",
+        "RE":   "🚆",
+        "S":    "🚆",
+        "SN":   "🚆",
+        "TGV":  "🚆",
+        "EC":   "🚆",
+        "RJX":  "🚆",
+        "TER":  "🚆",
+        "PE":   "🚆",
+        "EXT":  "🚆",
     }.get(mode, "🚌")
 
 
