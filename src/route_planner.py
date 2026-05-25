@@ -598,7 +598,9 @@ class RobustJourneyPlanner:
                 spare_time = leg.departure_ts - prev_leg.arrival_ts - self.min_transfer_sec - self.extra_transfer_sec
             elif prev_leg.leg_type == "walk":
                 # Walk transfer — use configurable speed
-                walk_sec = int(prev_leg.walk_distance_m / self.walking_speed * 60)
+                walk_sec = prev_leg.walk_duration_sec
+                if walk_sec is None:
+                    walk_sec = int(prev_leg.walk_distance_m / self.walking_speed * 60)
                 spare_time = leg.departure_ts - prev_leg.departure_ts - walk_sec - self.min_transfer_sec - self.extra_transfer_sec
             else:
                 continue

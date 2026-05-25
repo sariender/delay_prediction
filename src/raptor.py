@@ -39,6 +39,7 @@ class JourneyLeg:
     trip_id: Optional[str] = None
     route_id: Optional[str] = None
     walk_distance_m: float = 0.0
+    walk_duration_sec: Optional[int] = None
     # For delay model
     stop_id_raw: Optional[str] = None
     transport_mode: Optional[str] = None
@@ -83,6 +84,7 @@ class Label:
     board_ts: int = 0              # time we boarded
     walk_from: Optional[str] = None  # if reached by walking
     walk_distance: float = 0.0    # cumulative walk distance so far
+    walk_duration_sec: Optional[int] = None
     total_walk: float = 0.0       # total walk over journey so far
 
 
@@ -152,6 +154,7 @@ def raptor_forward(
                     arrival_ts=arr,
                     walk_from=source,
                     walk_distance=fp.distance_m,
+                    walk_duration_sec=walk_sec,
                     total_walk=fp.distance_m,
                 )
 
@@ -244,6 +247,7 @@ def raptor_forward(
                         arrival_ts=walk_arr,
                         walk_from=stop,
                         walk_distance=fp.distance_m,
+                        walk_duration_sec=walk_sec,
                         total_walk=curr_walk + fp.distance_m,
                     )
                     new_marked.add(fp.to_stop)
@@ -257,6 +261,7 @@ def raptor_forward(
                         arrival_ts=transfer_arr,
                         walk_from=stop,
                         walk_distance=0.0,  # explicit transfers don't count as walking
+                        walk_duration_sec=transfer_sec,
                         total_walk=curr_walk,
                     )
                     new_marked.add(to_stop)
@@ -312,15 +317,19 @@ def _reconstruct_journeys(
             if lbl.walk_from is not None:
                 # Walking leg
                 from_stop = lbl.walk_from
+                walk_sec = lbl.walk_duration_sec
+                if walk_sec is None:
+                    walk_sec = int(lbl.walk_distance / walking_speed * 60)
                 legs.append(JourneyLeg(
                     leg_type="walk",
                     from_stop=from_stop,
                     to_stop=current_stop,
                     from_name=graph.stops[from_stop].stop_name if from_stop in graph.stops else "",
                     to_name=graph.stops[current_stop].stop_name if current_stop in graph.stops else "",
-                    departure_ts=lbl.arrival_ts - int(lbl.walk_distance / walking_speed * 60),
+                    departure_ts=lbl.arrival_ts - walk_sec,
                     arrival_ts=lbl.arrival_ts,
                     walk_distance_m=lbl.walk_distance,
+                    walk_duration_sec=walk_sec,
                 ))
                 current_stop = from_stop
             elif lbl.trip_id is not None:
@@ -378,6 +387,20 @@ def _latest_trip_arriving_before(route: Route, stop_idx: int, before_ts: int) ->
     return result
 
 
+def _reverse_previous_arrival_cutoff(
+    stop: str,
+    target: str,
+    next_label: Optional[Label],
+    total_transfer_sec: int,
+) -> int:
+    """Latest time a previous transit may arrive before continuing from stop."""
+    if next_label is None:
+        return 0
+    if stop == target or next_label.walk_from is not None:
+        return next_label.departure_ts
+    return next_label.departure_ts - total_transfer_sec
+
+
 def raptor_reverse(
     graph: TransitGraph,
     target: str,
@@ -401,10 +424,17 @@ def raptor_reverse(
     # labels[k][stop] = latest departure from this stop in k transit legs to target
     labels: List[Dict[str, Label]] = [dict() for _ in range(max_rounds + 1)]
     best_departure: Dict[str, int] = defaultdict(lambda: 0)
+    best_labels: Dict[str, Label] = {}
+    incoming_explicit_transfers: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
+    for from_stop, transfers in graph.explicit_transfers.items():
+        for to_stop, transfer_sec in transfers:
+            incoming_explicit_transfers[to_stop].append((from_stop, transfer_sec))
 
     # Initialize target
-    labels[0][target] = Label(arrival_ts=arrival_deadline_ts, departure_ts=arrival_deadline_ts)
+    target_label = Label(arrival_ts=arrival_deadline_ts, departure_ts=arrival_deadline_ts)
+    labels[0][target] = target_label
     best_departure[target] = arrival_deadline_ts
+    best_labels[target] = target_label
 
     # Apply footpaths TO target
     for fp in graph.footpaths.get(target, []):
@@ -413,13 +443,16 @@ def raptor_reverse(
             dep = arrival_deadline_ts - walk_sec
             if dep > best_departure.get(fp.to_stop, 0):
                 best_departure[fp.to_stop] = dep
-                labels[0][fp.to_stop] = Label(
+                label = Label(
                     departure_ts=dep,
                     arrival_ts=arrival_deadline_ts,
                     walk_from=target,
                     walk_distance=fp.distance_m,
+                    walk_duration_sec=walk_sec,
                     total_walk=fp.distance_m,
                 )
+                labels[0][fp.to_stop] = label
+                best_labels[fp.to_stop] = label
 
     # Also check incoming footpaths
     for stop_id, fps in graph.footpaths.items():
@@ -429,13 +462,33 @@ def raptor_reverse(
                 dep = arrival_deadline_ts - walk_sec
                 if dep > best_departure.get(stop_id, 0):
                     best_departure[stop_id] = dep
-                    labels[0][stop_id] = Label(
+                    label = Label(
                         departure_ts=dep,
                         arrival_ts=arrival_deadline_ts,
                         walk_from=target,
                         walk_distance=fp.distance_m,
+                        walk_duration_sec=walk_sec,
                         total_walk=fp.distance_m,
                     )
+                    labels[0][stop_id] = label
+                    best_labels[stop_id] = label
+
+    # Explicit transfers that end at the target are final access legs, so
+    # they do not need the boarding buffer used before a transit leg.
+    for from_stop, transfer_sec in incoming_explicit_transfers.get(target, []):
+        dep = arrival_deadline_ts - transfer_sec
+        if dep > best_departure.get(from_stop, 0):
+            best_departure[from_stop] = dep
+            label = Label(
+                departure_ts=dep,
+                arrival_ts=arrival_deadline_ts,
+                walk_from=target,
+                walk_distance=0.0,
+                walk_duration_sec=transfer_sec,
+                total_walk=0.0,
+            )
+            labels[0][from_stop] = label
+            best_labels[from_stop] = label
 
     for k in range(1, max_rounds + 1):
         labels[k] = {}
@@ -459,18 +512,23 @@ def raptor_reverse(
             current_trip_idx: Optional[int] = None
             alight_stop: Optional[str] = None
             alight_ts: int = 0
+            onward_walk: float = 0.0
 
             # Scan backwards
             for si in range(end_idx, -1, -1):
                 stop = route.stop_sequence[si]
                 dep_here = best_departure.get(stop, 0)
                 if dep_here > 0 and (source is None or stop != source):
-                    arrive_before = dep_here - total_transfer_sec if stop != target else dep_here
+                    next_label = best_labels.get(stop)
+                    arrive_before = _reverse_previous_arrival_cutoff(
+                        stop, target, next_label, total_transfer_sec
+                    )
                     lt = _latest_trip_arriving_before(route, si, arrive_before)
                     if lt is not None and (current_trip_idx is None or lt > current_trip_idx):
                         current_trip_idx = lt
                         alight_stop = stop
                         alight_ts = route.trips[lt][si].arrival_ts
+                        onward_walk = next_label.total_walk if next_label is not None else 0.0
 
                 if current_trip_idx is None:
                     continue
@@ -483,42 +541,55 @@ def raptor_reverse(
                     continue
                 if dep_ts > best_departure.get(stop, 0) and dep_ts <= max_valid_departure:
                     best_departure[stop] = dep_ts
-                    labels[k][stop] = Label(
+                    label = Label(
                         departure_ts=dep_ts,
                         arrival_ts=alight_ts,
                         trip_id=trip[si].trip_id,
                         board_stop=alight_stop,
                         board_ts=alight_ts,
+                        total_walk=onward_walk,
                     )
+                    labels[k][stop] = label
+                    best_labels[stop] = label
                     marked.add(stop)
 
         # Footpaths
         for stop in list(marked):
             dep = best_departure[stop]
+            curr_walk = labels[k][stop].total_walk if stop in labels[k] else 0.0
             for fp in graph.footpaths.get(stop, []):
-                if fp.distance_m > max_walk_m:
+                if curr_walk + fp.distance_m > max_walk_m:
                     continue
                 walk_sec = max(1, int(fp.distance_m / walking_speed_m_per_min * 60))
-                walk_dep = dep - walk_sec
+                walk_dep = dep - walk_sec - total_transfer_sec
                 if walk_dep > best_departure.get(fp.to_stop, 0):
                     best_departure[fp.to_stop] = walk_dep
-                    labels[k][fp.to_stop] = Label(
+                    label = Label(
                         departure_ts=walk_dep,
+                        arrival_ts=walk_dep + walk_sec,
                         walk_from=stop,
                         walk_distance=fp.distance_m,
+                        walk_duration_sec=walk_sec,
+                        total_walk=curr_walk + fp.distance_m,
                     )
+                    labels[k][fp.to_stop] = label
+                    best_labels[fp.to_stop] = label
 
             # Explicit transfers (reverse: arriving at `stop` from a predecessor)
-            for to_stop, transfer_sec in graph.explicit_transfers.get(stop, []):
-                buffer_sec = 0 if to_stop == source else total_transfer_sec
-                xfer_dep = dep - transfer_sec - buffer_sec
-                if xfer_dep > best_departure.get(to_stop, 0):
-                    best_departure[to_stop] = xfer_dep
-                    labels[k][to_stop] = Label(
+            for from_stop, transfer_sec in incoming_explicit_transfers.get(stop, []):
+                xfer_dep = dep - transfer_sec - total_transfer_sec
+                if xfer_dep > best_departure.get(from_stop, 0):
+                    best_departure[from_stop] = xfer_dep
+                    label = Label(
                         departure_ts=xfer_dep,
+                        arrival_ts=xfer_dep + transfer_sec,
                         walk_from=stop,
                         walk_distance=0.0,
+                        walk_duration_sec=transfer_sec,
+                        total_walk=curr_walk,
                     )
+                    labels[k][from_stop] = label
+                    best_labels[from_stop] = label
 
     # Reconstruct for source
     if source is not None:
@@ -563,7 +634,9 @@ def _reconstruct_reverse_journeys(
                 break
 
             if lbl.walk_from is not None:
-                walk_sec = int(lbl.walk_distance / walking_speed * 60)
+                walk_sec = lbl.walk_duration_sec
+                if walk_sec is None:
+                    walk_sec = int(lbl.walk_distance / walking_speed * 60)
                 walk_dep_ts = legs[-1].arrival_ts if legs else lbl.departure_ts
                 legs.append(JourneyLeg(
                     leg_type="walk",
@@ -574,6 +647,7 @@ def _reconstruct_reverse_journeys(
                     departure_ts=walk_dep_ts,
                     arrival_ts=walk_dep_ts + walk_sec,
                     walk_distance_m=lbl.walk_distance,
+                    walk_duration_sec=walk_sec,
                 ))
                 current_stop = lbl.walk_from
             elif lbl.trip_id is not None:
