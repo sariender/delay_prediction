@@ -112,6 +112,22 @@ def _earliest_trip(route: Route, stop_idx: int, after_ts: int) -> Optional[int]:
     return result
 
 
+def _best_forward_label_before_round(
+    labels: List[Dict[str, Label]],
+    stop: str,
+    round_idx: int,
+) -> Optional[Label]:
+    """Best arrival label for `stop` from rounds strictly before `round_idx`."""
+    best_label: Optional[Label] = None
+    best_arrival = 2**31
+    for kk in range(round_idx):
+        lbl = labels[kk].get(stop)
+        if lbl is not None and lbl.arrival_ts < best_arrival:
+            best_label = lbl
+            best_arrival = lbl.arrival_ts
+    return best_label
+
+
 def raptor_forward(
     graph: TransitGraph,
     source: str,
@@ -192,19 +208,16 @@ def raptor_forward(
             for si in range(start_idx, len(route.stop_sequence)):
                 stop = route.stop_sequence[si]
                 # Can we catch an earlier trip at this stop?
-                arr_here = best_arrival[stop]
-                if arr_here < 2**31:
+                prev_label = _best_forward_label_before_round(labels, stop, k)
+                if prev_label is not None:
+                    arr_here = prev_label.arrival_ts
                     depart_after = arr_here + total_transfer_sec if stop != source else arr_here
                     et = _earliest_trip(route, si, depart_after)
                     if et is not None and (current_trip_idx is None or et < current_trip_idx):
                         current_trip_idx = et
                         board_stop = stop
                         board_ts = route.trips[et][si].departure_ts
-                        # Track walk distance from how we reached this stop
-                        for kk in range(k - 1, -1, -1):
-                            if stop in labels[kk]:
-                                prev_walk = labels[kk][stop].total_walk
-                                break
+                        prev_walk = prev_label.total_walk
 
                 if current_trip_idx is None:
                     continue
