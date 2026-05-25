@@ -91,8 +91,9 @@ class TransitGraph:
         self.trip_to_route: Dict[str, str] = {}
         # For delay model: trip_id+stop_id -> original row info
         self.event_info: Dict[Tuple[str, str], dict] = {}
-        # stop_id -> set of transfer stop_ids (from transfers.parquet)
-        self.explicit_transfers: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
+        # stop_id -> explicit transfers from transfers.parquet:
+        # (to_stop_id, transfer_seconds, geometric_distance_m)
+        self.explicit_transfers: Dict[str, List[Tuple[str, int, float]]] = defaultdict(list)
         self.trip_modes: Dict[str, str] = {}
 
     def build_from_spark(
@@ -223,7 +224,10 @@ class TransitGraph:
                     to_id = str(r["to_stop_id"]).split(":")[0]
                     t_time = int(r["min_transfer_time"]) if r["min_transfer_time"] is not None else min_transfer_seconds
                     if from_id in self.stops and to_id in self.stops:
-                        self.explicit_transfers[from_id].append((to_id, t_time))
+                        from_stop = self.stops[from_id]
+                        to_stop = self.stops[to_id]
+                        distance_m = haversine_m(from_stop.lat, from_stop.lon, to_stop.lat, to_stop.lon)
+                        self.explicit_transfers[from_id].append((to_id, t_time, distance_m))
             except Exception:
                 pass  # transfers may have different schema
 
@@ -321,6 +325,21 @@ class TransitGraph:
                     fp_ba = FootPath(s2.stop_id, s1.stop_id, d, walk_sec)
                     self.footpaths[s1.stop_id].append(fp_ab)
                     self.footpaths[s2.stop_id].append(fp_ba)
+
+        if transfers_pdf is not None:
+            for _, r in transfers_pdf.iterrows():
+                from_id = str(r["from_stop_id"]).split(":")[0]
+                to_id = str(r["to_stop_id"]).split(":")[0]
+                raw_time = r.get("min_transfer_time", None)
+                if raw_time is None or (isinstance(raw_time, float) and math.isnan(raw_time)):
+                    t_time = min_transfer_seconds
+                else:
+                    t_time = int(raw_time)
+                if from_id in self.stops and to_id in self.stops:
+                    from_stop = self.stops[from_id]
+                    to_stop = self.stops[to_id]
+                    distance_m = haversine_m(from_stop.lat, from_stop.lon, to_stop.lat, to_stop.lon)
+                    self.explicit_transfers[from_id].append((to_id, t_time, distance_m))
 
         self._min_transfer_seconds = min_transfer_seconds
         return self

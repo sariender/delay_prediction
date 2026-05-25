@@ -101,3 +101,47 @@ def test_forward_initial_walk_must_arrive_before_boarding():
         ("walk", ts(12, 30), ts(12, 59)),
         ("transit", ts(13, 5), ts(13, 17)),
     ]
+
+
+def test_forward_explicit_transfer_counts_toward_walking_limit():
+    graph = make_graph("O", "B", "C", "T")
+    graph.explicit_transfers["B"].append(("C", 180, 96.0))
+    add_trip(graph, "R0", "trip0", [
+        ("O", ts(12, 30), ts(12, 30)),
+        ("B", ts(12, 35), ts(12, 35)),
+    ])
+    add_trip(graph, "R1", "trip1", [
+        ("C", ts(12, 40), ts(12, 40)),
+        ("T", ts(12, 46), ts(12, 46)),
+    ])
+
+    assert not raptor_forward(
+        graph,
+        source="O",
+        target="T",
+        departure_ts=ts(12, 30),
+        max_rounds=3,
+        min_transfer_sec=0,
+        max_walk_m=50,
+        walking_speed_m_per_min=60,
+    )
+
+    journeys = raptor_forward(
+        graph,
+        source="O",
+        target="T",
+        departure_ts=ts(12, 30),
+        max_rounds=3,
+        min_transfer_sec=0,
+        max_walk_m=100,
+        walking_speed_m_per_min=60,
+    )
+
+    assert journeys
+    journey = min(journeys, key=lambda j: j.arrival_ts)
+    assert journey.total_walk_m == 96.0
+    assert [(leg.leg_type, leg.from_stop, leg.to_stop, leg.walk_distance_m) for leg in journey.legs] == [
+        ("transit", "O", "B", 0.0),
+        ("walk", "B", "C", 96.0),
+        ("transit", "C", "T", 0.0),
+    ]

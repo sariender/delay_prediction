@@ -22,6 +22,8 @@ from src.graph import FootPath, Route, Stop, StopEvent, TransitGraph
 
 INF = float("inf")
 
+ExplicitTransfer = Tuple[str, int] | Tuple[str, int, float]
+
 # ---------------------------------------------------------------------------
 # Journey leg representation
 # ---------------------------------------------------------------------------
@@ -126,6 +128,15 @@ def _best_forward_label_before_round(
             best_label = lbl
             best_arrival = lbl.arrival_ts
     return best_label
+
+
+def _transfer_parts(transfer: ExplicitTransfer) -> Tuple[str, int, float]:
+    """Return explicit transfer as (to_stop, seconds, distance_m)."""
+    if len(transfer) >= 3:
+        to_stop, transfer_sec, distance_m = transfer
+        return to_stop, transfer_sec, distance_m
+    to_stop, transfer_sec = transfer
+    return to_stop, transfer_sec, 0.0
 
 
 def raptor_forward(
@@ -266,16 +277,19 @@ def raptor_forward(
                     new_marked.add(fp.to_stop)
 
             # Also relax explicit transfers (from transfers.parquet)
-            for to_stop, transfer_sec in graph.explicit_transfers.get(stop, []):
+            for transfer in graph.explicit_transfers.get(stop, []):
+                to_stop, transfer_sec, transfer_distance_m = _transfer_parts(transfer)
+                if curr_walk + transfer_distance_m > max_walk_m:
+                    continue
                 transfer_arr = arr + transfer_sec
                 if transfer_arr < best_arrival[to_stop]:
                     best_arrival[to_stop] = transfer_arr
                     labels[k][to_stop] = Label(
                         arrival_ts=transfer_arr,
                         walk_from=stop,
-                        walk_distance=0.0,  # explicit transfers don't count as walking
+                        walk_distance=transfer_distance_m,
                         walk_duration_sec=transfer_sec,
-                        total_walk=curr_walk,
+                        total_walk=curr_walk + transfer_distance_m,
                     )
                     new_marked.add(to_stop)
 
@@ -438,10 +452,11 @@ def raptor_reverse(
     labels: List[Dict[str, Label]] = [dict() for _ in range(max_rounds + 1)]
     best_departure: Dict[str, int] = defaultdict(lambda: 0)
     best_labels: Dict[str, Label] = {}
-    incoming_explicit_transfers: Dict[str, List[Tuple[str, int]]] = defaultdict(list)
+    incoming_explicit_transfers: Dict[str, List[Tuple[str, int, float]]] = defaultdict(list)
     for from_stop, transfers in graph.explicit_transfers.items():
-        for to_stop, transfer_sec in transfers:
-            incoming_explicit_transfers[to_stop].append((from_stop, transfer_sec))
+        for transfer in transfers:
+            to_stop, transfer_sec, transfer_distance_m = _transfer_parts(transfer)
+            incoming_explicit_transfers[to_stop].append((from_stop, transfer_sec, transfer_distance_m))
 
     # Initialize target
     target_label = Label(arrival_ts=arrival_deadline_ts, departure_ts=arrival_deadline_ts)
@@ -488,7 +503,9 @@ def raptor_reverse(
 
     # Explicit transfers that end at the target are final access legs, so
     # they do not need the boarding buffer used before a transit leg.
-    for from_stop, transfer_sec in incoming_explicit_transfers.get(target, []):
+    for from_stop, transfer_sec, transfer_distance_m in incoming_explicit_transfers.get(target, []):
+        if transfer_distance_m > max_walk_m:
+            continue
         dep = arrival_deadline_ts - transfer_sec
         if dep > best_departure.get(from_stop, 0):
             best_departure[from_stop] = dep
@@ -496,9 +513,9 @@ def raptor_reverse(
                 departure_ts=dep,
                 arrival_ts=arrival_deadline_ts,
                 walk_from=target,
-                walk_distance=0.0,
+                walk_distance=transfer_distance_m,
                 walk_duration_sec=transfer_sec,
-                total_walk=0.0,
+                total_walk=transfer_distance_m,
             )
             labels[0][from_stop] = label
             best_labels[from_stop] = label
@@ -589,7 +606,9 @@ def raptor_reverse(
                     best_labels[fp.to_stop] = label
 
             # Explicit transfers (reverse: arriving at `stop` from a predecessor)
-            for from_stop, transfer_sec in incoming_explicit_transfers.get(stop, []):
+            for from_stop, transfer_sec, transfer_distance_m in incoming_explicit_transfers.get(stop, []):
+                if curr_walk + transfer_distance_m > max_walk_m:
+                    continue
                 xfer_dep = dep - transfer_sec - total_transfer_sec
                 if xfer_dep > best_departure.get(from_stop, 0):
                     best_departure[from_stop] = xfer_dep
@@ -597,9 +616,9 @@ def raptor_reverse(
                         departure_ts=xfer_dep,
                         arrival_ts=xfer_dep + transfer_sec,
                         walk_from=stop,
-                        walk_distance=0.0,
+                        walk_distance=transfer_distance_m,
                         walk_duration_sec=transfer_sec,
-                        total_walk=curr_walk,
+                        total_walk=curr_walk + transfer_distance_m,
                     )
                     labels[k][from_stop] = label
                     best_labels[from_stop] = label
