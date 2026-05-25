@@ -55,6 +55,7 @@ spark = (
     .config("spark.sql.catalog.iceberg", "org.apache.iceberg.spark.SparkCatalog")
     .config("spark.sql.catalog.iceberg.type", "hadoop")
     .config("spark.sql.catalog.iceberg.warehouse", f"{hadoopFS}/data/com-490/silver/")
+    .config("spark.driver.memory", "8g")
     .config("spark.executor.memory", "6g")
     .config("spark.executor.cores", "4")
     .config("spark.executor.instances", "4")
