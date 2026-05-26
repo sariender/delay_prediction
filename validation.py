@@ -281,7 +281,6 @@ for speed in [80, 50, 30, 15]:
         target=epfl,
         day="wednesday",
         departure_time="12:30",
-        mode="safest",
         walking_speed=speed,
     )
     if j:
